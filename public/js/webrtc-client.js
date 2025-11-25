@@ -9,39 +9,43 @@ class VoiceCallClient {
     this.pendingIceCandidates = [];
     this.connectionTimeout = null;
 
+    // ICE Server Configuration (No 3rd Party APIs Required!)
+    //
+    // OPTION 1: STUN Only (Free, works for same network and moderate NAT)
+    // OPTION 2: Add your own TURN server (see SETUP-OWN-TURN.md)
+    //
+    // To add your own TURN server after installing Coturn:
+    // 1. Install Coturn on your server (see SETUP-OWN-TURN.md)
+    // 2. Uncomment the TURN section below
+    // 3. Replace YOUR_SERVER_IP, username, and password
+
     this.iceServers = {
       iceServers: [
+        // STUN servers (free, public, no API needed)
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-        { urls: 'stun:stun.relay.metered.ca:80' },
+
+        // YOUR OWN TURN SERVER (Coturn installed)
+        // For localhost testing:
         {
-          urls: 'turn:global.relay.metered.ca:80',
-          username: 'e46a900f4716c43d0e5e2a84',
-          credential: 'dO+VDxNPq+L/qiGs',
+          urls: 'turn:127.0.0.1:3478',
+          username: 'turnuser',
+          credential: 'turnpass123',
         },
         {
-          urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-          username: 'e46a900f4716c43d0e5e2a84',
-          credential: 'dO+VDxNPq+L/qiGs',
+          urls: 'turn:127.0.0.1:3478?transport=tcp',
+          username: 'turnuser',
+          credential: 'turnpass123',
         },
-        {
-          urls: 'turn:global.relay.metered.ca:443',
-          username: 'e46a900f4716c43d0e5e2a84',
-          credential: 'dO+VDxNPq+L/qiGs',
-        },
-        {
-          urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-          username: 'e46a900f4716c43d0e5e2a84',
-          credential: 'dO+VDxNPq+L/qiGs',
-        },
+        // For production (different networks), replace 127.0.0.1 with your public IP
       ],
       iceCandidatePoolSize: 10,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
+      // iceTransportPolicy: 'relay',  // Uncomment to FORCE TURN relay (testing only)
     };
 
     this.initializeUI();
@@ -170,10 +174,14 @@ class VoiceCallClient {
       }
 
       this.connectionTimeout = setTimeout(() => {
-        if (this.peerConnection && 
-            this.peerConnection.iceConnectionState === 'checking') {
+        if (
+          this.peerConnection &&
+          this.peerConnection.iceConnectionState === 'checking'
+        ) {
           this.log('Connection timeout - taking too long');
-          this.updateStatus('Connection timeout. Click skip to try another partner.');
+          this.updateStatus(
+            'Connection timeout. Click skip to try another partner.',
+          );
           this.enableButtons(false, true, true);
         }
       }, 30000);
@@ -193,19 +201,26 @@ class VoiceCallClient {
           this.remoteAudio.volume = 1.0;
         }
         this.remoteAudio.srcObject = event.streams[0];
-        this.remoteAudio.play()
+        this.remoteAudio
+          .play()
           .then(() => this.log('Remote audio playing successfully'))
           .catch((e) => {
             this.log('Audio autoplay blocked - click to enable');
             this.updateStatus('Click anywhere to enable audio');
-            document.body.addEventListener('click', () => {
-              this.remoteAudio.play().then(() => this.log('Audio enabled'));
-            }, { once: true });
+            document.body.addEventListener(
+              'click',
+              () => {
+                this.remoteAudio.play().then(() => this.log('Audio enabled'));
+              },
+              { once: true },
+            );
           });
       };
 
       this.peerConnection.onicegatheringstatechange = () => {
-        this.log('ICE gathering state: ' + this.peerConnection.iceGatheringState);
+        this.log(
+          'ICE gathering state: ' + this.peerConnection.iceGatheringState,
+        );
       };
 
       this.peerConnection.onicecandidate = (event) => {
@@ -221,8 +236,10 @@ class VoiceCallClient {
 
       this.peerConnection.oniceconnectionstatechange = () => {
         this.log('ICE state: ' + this.peerConnection.iceConnectionState);
-        if (this.peerConnection.iceConnectionState === 'connected' ||
-            this.peerConnection.iceConnectionState === 'completed') {
+        if (
+          this.peerConnection.iceConnectionState === 'connected' ||
+          this.peerConnection.iceConnectionState === 'completed'
+        ) {
           if (this.connectionTimeout) {
             clearTimeout(this.connectionTimeout);
             this.connectionTimeout = null;
@@ -244,8 +261,10 @@ class VoiceCallClient {
           this.log('ICE connection disconnected - waiting for reconnection');
           this.updateStatus('Connection interrupted...');
           setTimeout(() => {
-            if (this.peerConnection && 
-                this.peerConnection.iceConnectionState === 'disconnected') {
+            if (
+              this.peerConnection &&
+              this.peerConnection.iceConnectionState === 'disconnected'
+            ) {
               this.log('Still disconnected after timeout');
               this.updateStatus('Connection lost. Click skip for new partner.');
               this.enableButtons(false, true, true);
@@ -256,7 +275,7 @@ class VoiceCallClient {
 
       this.peerConnection.onconnectionstatechange = () => {
         console.log('Connection state:', this.peerConnection.connectionState);
-        
+
         if (this.peerConnection.connectionState === 'connected') {
           this.isConnected = true;
           this.updateStatus('Connected! You can talk now');
@@ -307,7 +326,9 @@ class VoiceCallClient {
 
       while (this.pendingIceCandidates.length > 0) {
         const candidate = this.pendingIceCandidates.shift();
-        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        await this.peerConnection.addIceCandidate(
+          new RTCIceCandidate(candidate),
+        );
         this.log('Added queued ICE candidate');
       }
 
@@ -331,7 +352,9 @@ class VoiceCallClient {
 
       while (this.pendingIceCandidates.length > 0) {
         const candidate = this.pendingIceCandidates.shift();
-        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        await this.peerConnection.addIceCandidate(
+          new RTCIceCandidate(candidate),
+        );
         this.log('Added queued ICE candidate from answer');
       }
     } catch (error) {
@@ -341,12 +364,19 @@ class VoiceCallClient {
 
   async handleIceCandidate(candidate) {
     try {
-      this.log('Received ICE candidate: ' + candidate.type);
+      // Extract candidate type from the candidate string
+      const candidateType = candidate.type || 
+        (candidate.candidate && candidate.candidate.includes('typ relay') ? 'relay' :
+         candidate.candidate && candidate.candidate.includes('typ srflx') ? 'srflx' :
+         candidate.candidate && candidate.candidate.includes('typ host') ? 'host' : 'unknown');
+      
+      this.log('Received ICE candidate: ' + candidateType);
+      
       if (this.peerConnection && this.peerConnection.remoteDescription) {
         await this.peerConnection.addIceCandidate(
           new RTCIceCandidate(candidate),
         );
-        this.log('Added ICE candidate');
+        this.log('Added ICE candidate: ' + candidateType);
       } else {
         this.log('Queuing ICE candidate (no remote description yet)');
         this.pendingIceCandidates.push(candidate);
