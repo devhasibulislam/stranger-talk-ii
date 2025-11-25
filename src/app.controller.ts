@@ -6,9 +6,9 @@ export class AppController {
   constructor(private readonly appService: AppService) {}
 
   @Get()
-  @Render('index')
+  @Render('call')
   root() {
-    return { message: 'Welcome to Stranger Talk' };
+    return { title: 'Stranger Talk' };
   }
 
   @Get('api-status')

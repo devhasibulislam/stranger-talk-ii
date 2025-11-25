@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+</head>
+<body>
+    <h1>Stranger Talk</h1>
+    
+    <div id="status">
+        <p id="statusText">Ready to start</p>
+    </div>
+
+    <div id="controls">
+        <button id="startBtn">Start Calling</button>
+        <button id="endBtn" disabled>End Calling</button>
+        <button id="skipBtn" disabled>Skip Calling</button>
+    </div>
+
+    <div id="stats">
+        <p>Waiting Users: <span id="waitingUsers">0</span></p>
+        <p>Active Connections: <span id="activeConnections">0</span></p>
+    </div>
+
+    <div id="debug">
+        <strong>Debug Log:</strong>
+        <div id="debugLog"></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="/js/webrtc-client.js"></script>
+</body>
+</html>
