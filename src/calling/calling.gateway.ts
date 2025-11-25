@@ -53,7 +53,22 @@ export class CallingGateway
     const partnerId = this.matchingService.skipPartner(client.id);
 
     if (partnerId) {
+      // Immediately notify partner they were skipped
       this.server.to(partnerId).emit('partner-skipped');
+
+      // Give a small delay to ensure partner receives notification
+      // before we try to match them with someone else
+      setTimeout(() => {
+        // Check if the skipped partner is now in queue and try to match them
+        const skippedPartnerNewMatch =
+          this.matchingService.addToQueue(partnerId);
+        if (skippedPartnerNewMatch) {
+          this.server
+            .to(partnerId)
+            .emit('matched', { partnerId: skippedPartnerNewMatch });
+          this.server.to(skippedPartnerNewMatch).emit('matched', { partnerId });
+        }
+      }, 100);
     }
 
     const newPartnerId = this.matchingService.addToQueue(client.id);
@@ -84,11 +99,17 @@ export class CallingGateway
   ) {
     const partnerId = this.matchingService.getPartner(client.id);
 
-    if (partnerId) {
+    if (
+      partnerId &&
+      this.matchingService.isConnectionValid(client.id, partnerId)
+    ) {
       this.server.to(partnerId).emit('webrtc-offer', {
         offer: data.offer,
         from: client.id,
       });
+    } else {
+      // Connection is no longer valid, notify client
+      client.emit('connection-invalid');
     }
   }
 
@@ -99,11 +120,21 @@ export class CallingGateway
   ) {
     const partnerId = this.matchingService.getPartner(client.id);
 
-    if (partnerId) {
+    if (
+      partnerId &&
+      this.matchingService.isConnectionValid(client.id, partnerId)
+    ) {
+      // Mark connection as established when answer is sent
+      this.matchingService.markConnectionEstablished(client.id);
+      this.matchingService.markConnectionEstablished(partnerId);
+
       this.server.to(partnerId).emit('webrtc-answer', {
         answer: data.answer,
         from: client.id,
       });
+    } else {
+      // Connection is no longer valid, notify client
+      client.emit('connection-invalid');
     }
   }
 
@@ -114,7 +145,10 @@ export class CallingGateway
   ) {
     const partnerId = this.matchingService.getPartner(client.id);
 
-    if (partnerId) {
+    if (
+      partnerId &&
+      this.matchingService.isConnectionValid(client.id, partnerId)
+    ) {
       this.server.to(partnerId).emit('webrtc-ice-candidate', {
         candidate: data.candidate,
         from: client.id,

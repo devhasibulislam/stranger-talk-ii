@@ -98,7 +98,17 @@ class VoiceCallClient {
       this.partnerId = data.partnerId;
       this.log('Matched with partner: ' + data.partnerId);
       this.updateStatus('Matched! Connecting...');
-      await this.setupCall(true);
+      
+      // Add a small delay to ensure both clients are ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Verify we still have a partner before setting up call
+      if (this.partnerId === data.partnerId) {
+        await this.setupCall(true);
+      } else {
+        this.log('Match cancelled before connection could be established');
+        this.updateStatus('Match cancelled. Finding new partner...');
+      }
     });
 
     this.socket.on('webrtc-offer', async (data) => {
@@ -121,9 +131,11 @@ class VoiceCallClient {
     });
 
     this.socket.on('partner-skipped', () => {
-      this.updateStatus('Partner skipped you');
+      this.log('Partner skipped you - finding new match');
+      this.updateStatus('Partner skipped you. Finding new match...');
       this.cleanup();
-      this.enableButtons(true, false, false);
+      // Keep end button enabled as we're still in calling mode
+      this.enableButtons(false, true, false);
     });
 
     this.socket.on('partner-ended', () => {
@@ -134,6 +146,13 @@ class VoiceCallClient {
 
     this.socket.on('call-ended', () => {
       this.updateStatus('Call ended');
+      this.cleanup();
+      this.enableButtons(true, false, false);
+    });
+
+    this.socket.on('connection-invalid', () => {
+      this.log('Connection is no longer valid');
+      this.updateStatus('Connection cancelled. Click Start to try again.');
       this.cleanup();
       this.enableButtons(true, false, false);
     });
@@ -308,6 +327,13 @@ class VoiceCallClient {
   async handleOffer(offer) {
     try {
       this.log('Received offer from partner');
+      
+      // Verify we still have a valid partner
+      if (!this.partnerId) {
+        this.log('Ignoring offer - no valid partner');
+        return;
+      }
+      
       if (!this.localStream) {
         this.localStream = await navigator.mediaDevices.getUserMedia({
           audio: {
