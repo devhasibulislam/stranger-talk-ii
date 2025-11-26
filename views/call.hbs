@@ -6,25 +6,29 @@
     <title>{{title}}</title>
 </head>
 <body>
-    <h1>Stranger Talk</h1>
+    <h1>{{title}}</h1>
     
-    <div id="status">
+    <div>
+        <h2>Status</h2>
         <p id="statusText">Ready to start</p>
+        <p><strong>Note:</strong> If you can't hear your partner after connecting, click anywhere on the page to enable audio.</p>
     </div>
 
-    <div id="controls">
+    <div>
+        <h2>Controls</h2>
         <button id="startBtn">Start Calling</button>
-        <button id="endBtn" disabled>End Calling</button>
-        <button id="skipBtn" disabled>Skip Calling</button>
+        <button id="endBtn" disabled>End Call</button>
+        <button id="skipBtn" disabled>Skip Partner</button>
     </div>
 
-    <div id="stats">
+    <div>
+        <h2>Statistics</h2>
         <p>Waiting Users: <span id="waitingUsers">0</span></p>
         <p>Active Connections: <span id="activeConnections">0</span></p>
     </div>
 
-    <div id="debug">
-        <strong>Debug Log:</strong>
+    <div>
+        <h2>Debug Log</h2>
         <div id="debugLog"></div>
     </div>
 

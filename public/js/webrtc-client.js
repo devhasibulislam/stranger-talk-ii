@@ -4,32 +4,31 @@ class VoiceCallClient {
     this.peerConnection = null;
     this.localStream = null;
     this.remoteAudio = null;
+    this.audioContext = null;
+    this.audioSource = null;
+    this.audioDestination = null;
     this.isConnected = false;
     this.partnerId = null;
     this.pendingIceCandidates = [];
     this.connectionTimeout = null;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.audioUnlocked = false;
+    this.localAudioMonitor = null;
+    this.remoteAudioMonitor = null;
 
-    // ICE Server Configuration (No 3rd Party APIs Required!)
-    //
-    // OPTION 1: STUN Only (Free, works for same network and moderate NAT)
-    // OPTION 2: Add your own TURN server (see SETUP-OWN-TURN.md)
-    //
-    // To add your own TURN server after installing Coturn:
-    // 1. Install Coturn on your server (see SETUP-OWN-TURN.md)
-    // 2. Uncomment the TURN section below
-    // 3. Replace YOUR_SERVER_IP, username, and password
-
+    // Enhanced ICE Server Configuration for all network types
     this.iceServers = {
       iceServers: [
-        // STUN servers (free, public, no API needed)
+        // Multiple STUN servers for redundancy
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.services.mozilla.com' },
 
-        // YOUR OWN TURN SERVER (Coturn installed)
-        // For localhost testing:
+        // TURN server (for restrictive networks)
         {
           urls: 'turn:127.0.0.1:3478',
           username: 'turnuser',
@@ -40,12 +39,11 @@ class VoiceCallClient {
           username: 'turnuser',
           credential: 'turnpass123',
         },
-        // For production (different networks), replace 127.0.0.1 with your public IP
       ],
       iceCandidatePoolSize: 10,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      // iceTransportPolicy: 'relay',  // Uncomment to FORCE TURN relay (testing only)
+      iceTransportPolicy: 'all', // Try all connection types
     };
 
     this.initializeUI();
@@ -64,6 +62,13 @@ class VoiceCallClient {
     this.startBtn.addEventListener('click', () => this.startCalling());
     this.endBtn.addEventListener('click', () => this.endCalling());
     this.skipBtn.addEventListener('click', () => this.skipPartner());
+    
+    // Initialize audio element in DOM
+    this.remoteAudio = document.createElement('audio');
+    this.remoteAudio.id = 'remoteAudio';
+    this.remoteAudio.autoplay = true;
+    this.remoteAudio.playsinline = true;
+    document.body.appendChild(this.remoteAudio);
   }
 
   log(message) {
@@ -76,18 +81,41 @@ class VoiceCallClient {
   }
 
   connectSocket() {
-    this.socket = io();
+    this.socket = io({
+      reconnection: true,
+      reconnectionAttempts: this.maxReconnectAttempts,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+      transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+    });
 
     this.socket.on('connect', () => {
       this.log('Connected to signaling server');
       this.updateStatus('Connected - Ready to start');
+      this.reconnectAttempts = 0;
       this.requestStats();
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('Disconnected from server');
-      this.updateStatus('Disconnected from server');
+    this.socket.on('disconnect', (reason) => {
+      console.log('Disconnected from server:', reason);
+      this.updateStatus('Disconnected from server - Reconnecting...');
       this.cleanup();
+    });
+
+    this.socket.on('reconnect_attempt', (attempt) => {
+      this.log(`Reconnection attempt ${attempt}/${this.maxReconnectAttempts}`);
+      this.updateStatus(`Reconnecting... (${attempt}/${this.maxReconnectAttempts})`);
+    });
+
+    this.socket.on('reconnect', (attempt) => {
+      this.log(`Reconnected after ${attempt} attempts`);
+      this.updateStatus('Reconnected - Ready to start');
+    });
+
+    this.socket.on('reconnect_failed', () => {
+      this.log('Failed to reconnect to server');
+      this.updateStatus('Connection failed. Please refresh the page.');
     });
 
     this.socket.on('waiting', () => {
@@ -172,10 +200,23 @@ class VoiceCallClient {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 48000,
         },
-        video: false,
+        video: false, // Audio only
       });
 
+      this.log('Audio stream started');
+      
+      // Verify microphone is working
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        this.log(`Microphone: ${audioTrack.label}`);
+        this.log(`Track enabled: ${audioTrack.enabled}, muted: ${audioTrack.muted}, readyState: ${audioTrack.readyState}`);
+        
+        // Monitor local audio levels
+        this.startLocalAudioMonitoring();
+      }
+      
       this.updateStatus('Microphone access granted. Finding partner...');
       this.socket.emit('start-calling');
       this.enableButtons(false, true, false);
@@ -209,31 +250,47 @@ class VoiceCallClient {
       this.pendingIceCandidates = [];
 
       this.localStream.getTracks().forEach((track) => {
+        this.log(`Adding local ${track.kind} track - enabled: ${track.enabled}, muted: ${track.muted}`);
         this.peerConnection.addTrack(track, this.localStream);
       });
 
       this.peerConnection.ontrack = (event) => {
-        this.log('Received remote audio track');
-        if (!this.remoteAudio) {
-          this.remoteAudio = new Audio();
-          this.remoteAudio.autoplay = true;
+        this.log('Received remote track: ' + event.track.kind);
+        
+        if (event.track.kind === 'audio') {
+          this.log('Setting up remote audio stream');
+          this.log(`Remote track - enabled: ${event.track.enabled}, muted: ${event.track.muted}, readyState: ${event.track.readyState}`);
+          
+          // SIMPLE APPROACH: Directly assign stream to audio element (like the article)
+          this.remoteAudio.srcObject = event.streams[0];
           this.remoteAudio.volume = 1.0;
+          this.remoteAudio.muted = false;
+          
+          // Try to play
+          this.remoteAudio.play()
+            .then(() => {
+              this.log('✓ Remote audio playing successfully');
+              this.log(`Audio state - volume: ${this.remoteAudio.volume}, paused: ${this.remoteAudio.paused}`);
+            })
+            .catch((e) => {
+              this.log('⚠ Audio autoplay blocked: ' + e.message);
+              this.log('Click anywhere to enable audio');
+              
+              // Add one-time click handler
+              const enableAudio = () => {
+                this.remoteAudio.play()
+                  .then(() => {
+                    this.log('✓ Audio enabled after user click');
+                  })
+                  .catch(err => this.log('✗ Failed to play: ' + err.message));
+                document.body.removeEventListener('click', enableAudio);
+              };
+              document.body.addEventListener('click', enableAudio);
+            });
+          
+          // Monitor audio levels for diagnostics
+          this.startAudioLevelMonitoring(event.streams[0]);
         }
-        this.remoteAudio.srcObject = event.streams[0];
-        this.remoteAudio
-          .play()
-          .then(() => this.log('Remote audio playing successfully'))
-          .catch((e) => {
-            this.log('Audio autoplay blocked - click to enable');
-            this.updateStatus('Click anywhere to enable audio');
-            document.body.addEventListener(
-              'click',
-              () => {
-                this.remoteAudio.play().then(() => this.log('Audio enabled'));
-              },
-              { once: true },
-            );
-          });
       };
 
       this.peerConnection.onicegatheringstatechange = () => {
@@ -264,6 +321,24 @@ class VoiceCallClient {
             this.connectionTimeout = null;
           }
           this.isConnected = true;
+          
+          // Diagnostic: Check audio tracks
+          const senders = this.peerConnection.getSenders();
+          const receivers = this.peerConnection.getReceivers();
+          this.log(`Connection established - Senders: ${senders.length}, Receivers: ${receivers.length}`);
+          
+          senders.forEach(sender => {
+            if (sender.track) {
+              this.log(`Sending ${sender.track.kind} track - enabled: ${sender.track.enabled}, muted: ${sender.track.muted}`);
+            }
+          });
+          
+          receivers.forEach(receiver => {
+            if (receiver.track) {
+              this.log(`Receiving ${receiver.track.kind} track - enabled: ${receiver.track.enabled}, muted: ${receiver.track.muted}`);
+            }
+          });
+          
           this.updateStatus('Connected! You can talk now');
           this.enableButtons(false, true, true);
         } else if (this.peerConnection.iceConnectionState === 'checking') {
@@ -309,9 +384,11 @@ class VoiceCallClient {
         }
       };
 
+      // Create offer/answer for audio connection
       if (isInitiator) {
         const offer = await this.peerConnection.createOffer({
           offerToReceiveAudio: true,
+          offerToReceiveVideo: false, // Audio only
           iceRestart: false,
         });
         await this.peerConnection.setLocalDescription(offer);
@@ -340,9 +417,12 @@ class VoiceCallClient {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
+            sampleRate: 48000,
           },
-          video: false,
+          video: false, // Audio only
         });
+        
+        this.log('Audio stream started');
       }
 
       await this.setupCall(false);
@@ -360,6 +440,7 @@ class VoiceCallClient {
 
       const answer = await this.peerConnection.createAnswer({
         offerToReceiveAudio: true,
+        offerToReceiveVideo: false, // Audio only
       });
       await this.peerConnection.setLocalDescription(answer);
       this.log('Created and sent answer');
@@ -431,6 +512,26 @@ class VoiceCallClient {
       clearTimeout(this.connectionTimeout);
       this.connectionTimeout = null;
     }
+    
+    if (this.localAudioMonitor) {
+      clearInterval(this.localAudioMonitor);
+      this.localAudioMonitor = null;
+    }
+    
+    if (this.remoteAudioMonitor) {
+      clearInterval(this.remoteAudioMonitor);
+      this.remoteAudioMonitor = null;
+    }
+    
+    // Disconnect audio source
+    if (this.audioSource) {
+      try {
+        this.audioSource.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
+      this.audioSource = null;
+    }
 
     if (this.peerConnection) {
       this.peerConnection.close();
@@ -440,7 +541,7 @@ class VoiceCallClient {
     if (this.remoteAudio) {
       this.remoteAudio.pause();
       this.remoteAudio.srcObject = null;
-      this.remoteAudio = null;
+      // Don't remove the audio element, just clear its source
     }
 
     if (this.localStream) {
@@ -466,6 +567,84 @@ class VoiceCallClient {
   requestStats() {
     if (this.socket && this.socket.connected) {
       this.socket.emit('get-stats');
+    }
+  }
+  
+  startAudioLevelMonitoring(stream) {
+    try {
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.log('AudioContext created for monitoring');
+      }
+      
+      // Clean up previous monitoring
+      if (this.remoteAudioMonitor) {
+        clearInterval(this.remoteAudioMonitor);
+      }
+      if (this.audioSource) {
+        try {
+          this.audioSource.disconnect();
+        } catch (e) {}
+      }
+      
+      // Create analyser for monitoring only (not for playback)
+      const source = this.audioContext.createMediaStreamSource(stream);
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      // Note: NOT connecting to destination - audio plays through <audio> element
+      
+      this.audioSource = source;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      // Monitor levels every 2 seconds
+      this.remoteAudioMonitor = setInterval(() => {
+        if (!this.peerConnection || this.peerConnection.iceConnectionState !== 'connected') return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        
+        if (average > 5) {
+          this.log(`🔊 Remote audio level: ${Math.round(average)}`);
+        }
+      }, 2000);
+      
+      this.log('Audio level monitoring started');
+    } catch (error) {
+      this.log('Error starting audio monitoring: ' + error.message);
+    }
+  }
+  
+  startLocalAudioMonitoring() {
+    try {
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      
+      const source = this.audioContext.createMediaStreamSource(this.localStream);
+      const analyser = this.audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const checkAudioLevel = () => {
+        if (!this.localStream) return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        
+        if (average > 5) {
+          this.log(`🎤 Local audio level: ${Math.round(average)}`);
+        }
+      };
+      
+      // Check every 2 seconds
+      this.localAudioMonitor = setInterval(checkAudioLevel, 2000);
+      
+      this.log('Local audio monitoring started');
+    } catch (error) {
+      this.log('Error starting local audio monitoring: ' + error.message);
     }
   }
 }
